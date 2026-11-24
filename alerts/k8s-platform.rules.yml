@@ -1,0 +1,81 @@
+# Platform alerts for an on-prem Kubernetes cluster
+# (metrics from kube-state-metrics and node-exporter, both shipped by kube-prometheus-stack)
+
+groups:
+  - name: k8s-workloads
+    rules:
+      - alert: PodCrashLooping
+        expr: |
+          max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+          description: "Container {{ $labels.container }} keeps restarting. Check `kubectl logs --previous`."
+
+      - alert: PodNotReady
+        expr: |
+          sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown|Failed"}) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} not ready for 15m"
+
+      - alert: DeploymentReplicasMismatch
+        expr: |
+          kube_deployment_spec_replicas != kube_deployment_status_replicas_available
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas"
+
+      - alert: ContainerOOMKilled
+        expr: |
+          increase(kube_pod_container_status_restarts_total[15m]) > 0
+          and on (namespace, pod, container)
+          kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} was OOMKilled"
+          description: "Container {{ $labels.container }} hit its memory limit. Review requests/limits."
+
+  - name: k8s-nodes
+    rules:
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready", status="true"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Node {{ $labels.node }} is NotReady"
+
+      - alert: NodeDiskWillFillIn24h
+        expr: |
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) < 0.15
+          and
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}[6h], 24 * 3600) < 0
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} will fill within 24h"
+
+      - alert: NodeHighMemory
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.90
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Memory above 90% on {{ $labels.instance }}"
+
+      - alert: CertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in {{ $value | humanize }} days"

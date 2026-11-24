@@ -1,0 +1,16 @@
+route:
+  receiver: default
+  group_by: [alertname]
+  group_wait: 30s
+  repeat_interval: 1h
+  routes:
+    - matchers: [severity="page"]
+      receiver: oncall
+
+receivers:
+  - name: default
+  - name: oncall
+    # replace with your Slack / Teams / PagerDuty integration
+    webhook_configs:
+      - url: http://example.invalid/oncall
+        send_resolved: true

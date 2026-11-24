@@ -1,0 +1,44 @@
+# Local demo of the full stack in one command:  docker compose up -d --build
+#   demo-api      http://localhost:8080/api/orders
+#   Prometheus    http://localhost:9090
+#   Alertmanager  http://localhost:9093
+#   Grafana       http://localhost:3000   (admin / admin)
+
+services:
+  demo-api:
+    build: ../app
+    environment:
+      ERROR_RATE: "0.02"
+      LATENCY_MS: "90"
+    ports: ["8080:8080"]
+
+  loadgen:
+    image: python:3.12-slim
+    volumes: ["../app/loadgen.py:/loadgen.py:ro"]
+    environment:
+      TARGET: http://demo-api:8080/api/orders
+      RPS: "10"
+    command: ["python", "/loadgen.py"]
+    depends_on: [demo-api]
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../alerts:/etc/prometheus/rules:ro
+    ports: ["9090:9090"]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes: ["./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"]
+    ports: ["9093:9093"]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]

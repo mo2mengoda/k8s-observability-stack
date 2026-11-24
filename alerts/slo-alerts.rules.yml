@@ -1,0 +1,84 @@
+# SLO: 99.5% of /api requests succeed (non-5xx) over 30 days
+#      -> error budget = 0.5%
+# Alerting follows the multi-window, multi-burn-rate approach
+# from the Google SRE Workbook (fast burn = page, slow burn = ticket).
+
+groups:
+  - name: demo-api-recording
+    interval: 30s
+    rules:
+      # error ratio over several windows (5xx / all)
+      - record: slo:http_error_ratio:rate5m
+        expr: |
+          sum(rate(http_requests_total{route=~"/api/.*", status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{route=~"/api/.*"}[5m]))
+      - record: slo:http_error_ratio:rate30m
+        expr: |
+          sum(rate(http_requests_total{route=~"/api/.*", status=~"5.."}[30m]))
+          /
+          sum(rate(http_requests_total{route=~"/api/.*"}[30m]))
+      - record: slo:http_error_ratio:rate1h
+        expr: |
+          sum(rate(http_requests_total{route=~"/api/.*", status=~"5.."}[1h]))
+          /
+          sum(rate(http_requests_total{route=~"/api/.*"}[1h]))
+      - record: slo:http_error_ratio:rate6h
+        expr: |
+          sum(rate(http_requests_total{route=~"/api/.*", status=~"5.."}[6h]))
+          /
+          sum(rate(http_requests_total{route=~"/api/.*"}[6h]))
+      # p95 latency per route
+      - record: route:http_request_duration_seconds:p95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, route) (rate(http_request_duration_seconds_bucket[5m])))
+
+  - name: demo-api-slo-alerts
+    rules:
+      - alert: ErrorBudgetFastBurn
+        # 14.4x burn rate -> 2% of the monthly budget gone in 1 hour
+        expr: |
+          slo:http_error_ratio:rate1h > (14.4 * 0.005)
+          and
+          slo:http_error_ratio:rate5m > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          slo: demo-api-availability
+        annotations:
+          summary: "demo-api is burning its error budget fast"
+          description: "Error ratio is {{ $value | humanizePercentage }} (1h). At this rate the 30-day budget is gone in ~2 days."
+          runbook_url: "https://github.com/mo2mengoda/k8s-observability-stack/blob/main/runbooks/high-error-rate.md"
+
+      - alert: ErrorBudgetSlowBurn
+        # 6x burn rate -> 5% of the monthly budget gone in 6 hours
+        expr: |
+          slo:http_error_ratio:rate6h > (6 * 0.005)
+          and
+          slo:http_error_ratio:rate30m > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: demo-api-availability
+        annotations:
+          summary: "demo-api error budget is burning steadily"
+          description: "Error ratio is {{ $value | humanizePercentage }} (6h). Investigate during working hours."
+
+      - alert: HighLatencyP95
+        expr: route:http_request_duration_seconds:p95{route=~"/api/.*"} > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 latency above 500ms on {{ $labels.route }}"
+          description: "p95 latency is {{ $value | humanizeDuration }}."
+
+      - alert: TargetDown
+        expr: up{job=~"demo-api.*"} == 0
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.instance }}"
+          description: "Target {{ $labels.job }}/{{ $labels.instance }} has been down for 3 minutes."

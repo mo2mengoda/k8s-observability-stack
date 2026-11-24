@@ -1,0 +1,92 @@
+# Values for prometheus-community/kube-prometheus-stack on an on-prem cluster.
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f helm/kube-prometheus-stack-values.yaml
+
+fullnameOverride: monitoring
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    retentionSize: 40GB
+    # pick up ServiceMonitors / PrometheusRules from every namespace,
+    # not only the ones created by this Helm release
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 500m, memory: 2Gi }
+      limits: { memory: 4Gi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path   # change to your on-prem StorageClass (Longhorn, NFS, Ceph...)
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+  config:
+    route:
+      receiver: default
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - matchers: [severity="page"]
+          receiver: oncall
+          repeat_interval: 1h
+        - matchers: [alertname="Watchdog"]
+          receiver: "null"
+    inhibit_rules:
+      # don't send the ticket if the page for the same alert is already firing
+      - source_matchers: [severity="page"]
+        target_matchers: [severity="ticket"]
+        equal: [alertname, namespace]
+    receivers:
+      - name: "null"
+      - name: default
+        webhook_configs:
+          - url: http://alert-webhook.monitoring.svc:8080/ticket   # e.g. Teams/Slack/Jira bridge
+      - name: oncall
+        webhook_configs:
+          - url: http://alert-webhook.monitoring.svc:8080/page
+            send_resolved: true
+
+grafana:
+  adminPassword: ""            # set via existingSecret in real clusters
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 5Gi
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL      # load any ConfigMap labeled grafana_dashboard=1
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts: [grafana.lab.local]
+
+# on-prem clusters usually don't expose these control-plane endpoints
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false

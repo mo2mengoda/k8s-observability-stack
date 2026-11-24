@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/rules/slo-alerts.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: demo-api
+    static_configs:
+      - targets: ["demo-api:8080"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
